@@ -18,18 +18,16 @@ package dax
 import (
 	"context"
 	"crypto/tls"
-	"errors"
-	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/aws/aws-dax-go/dax/internal/client"
 	"github.com/aws/aws-dax-go/dax/internal/proxy"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/client/metadata"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/smithy-go/logging"
 )
 
 // Dax makes requests to the Amazon DAX API, which conforms to the DynamoDB API.
@@ -50,8 +48,8 @@ type Config struct {
 	WriteRetries   int
 	ReadRetries    int
 
-	LogLevel aws.LogLevelType
-	Logger   aws.Logger
+	// LogLevel aws.LogLevelType
+	Logger logging.Logger
 }
 
 // DefaultConfig returns the default DAX configuration.
@@ -64,29 +62,18 @@ func DefaultConfig() Config {
 		RequestTimeout: 1 * time.Minute,
 		WriteRetries:   2,
 		ReadRetries:    2,
-		LogLevel:       aws.LogOff,
-		Logger:         aws.NewDefaultLogger(),
+		// LogLevel:       aws.LogOff,
+		Logger: logging.NewStandardLogger(os.Stdout),
 	}
-}
-
-// NewWithSession creates a new instance of the DAX config with a session.
-//
-// Only configurations relevent to DAX will be used, others will be ignored.
-func NewConfigWithSession(session session.Session) Config {
-	dc := DefaultConfig()
-	if session.Config != nil {
-		dc.mergeFrom(*session.Config)
-	}
-	return dc
 }
 
 // New creates a new instance of the DAX client with a DAX configuration.
 func New(cfg Config) (*Dax, error) {
-	cfg.Config.SetLogger(cfg.Logger, cfg.LogLevel)
+	cfg.Config.SetLogger(cfg.Logger)
 	c, err := client.New(cfg.Config)
 	if err != nil {
 		if cfg.Logger != nil {
-			cfg.Logger.Log(fmt.Sprintf("ERROR: Exception in initialisation of DAX Client : %s", err))
+			cfg.Logger.Logf(logging.Warn, "ERROR: Exception in initialisation of DAX Client : %s", err)
 		}
 		return nil, err
 	}
@@ -110,89 +97,64 @@ func SecureDialContext(endpoint string, skipHostnameVerification bool) (func(ctx
 	return dialer.DialContext, nil
 }
 
-// NewWithSession creates a new instance of the DAX client with a session.
+// NewWithConfig creates a new instance of the DAX client with an AWS config.
 //
 // Only configurations relevent to DAX will be used, others will be ignored.
 //
 // Example:
-// 		mySession := session.Must(session.NewSession(
-// 			&aws.Config{
-// 				Region: aws.String("us-east-1"),
-// 				Endpoint: aws.String("dax://mycluster.frfx8h.clustercfg.dax.usw2.amazonaws.com:8111"),
-// 			}))
 //
-// 		// Create a DAX client from just a session.
-// 		svc := dax.NewWithSession(mySession)
-func NewWithSession(session session.Session) (*Dax, error) {
+//		cfg, err := config.LoadDefaultConfig(context.Background())
+//	 if err != nil {
+//		  // handle error
+//	 }
+//
+//		// Create a DAX client from an aws config.
+//		svc, err := dax.NewWithConfig(cfg)
+func NewWithConfig(config aws.Config) (*Dax, error) {
 	dc := DefaultConfig()
-	if session.Config != nil {
-		dc.mergeFrom(*session.Config)
-	}
+	dc.mergeFrom(config)
 	return New(dc)
 }
 
 func (c *Config) mergeFrom(ac aws.Config) {
-	if r := ac.MaxRetries; r != nil && *r != aws.UseServiceDefaultRetries {
-		c.WriteRetries = *r
-		c.ReadRetries = *r
+	if ac.Retryer != nil {
+		c.WriteRetries = ac.RetryMaxAttempts
+		c.ReadRetries = ac.RetryMaxAttempts
 	}
 	if ac.Logger != nil {
 		c.Logger = ac.Logger
 	}
-	if ac.LogLevel != nil {
-		c.LogLevel = *ac.LogLevel
+	if ac.EndpointResolver != nil {
+		c.EndpointResolver = ac.EndpointResolver
 	}
-
+	if ac.EndpointResolverWithOptions != nil {
+		c.EndpointResolverWithOptions = ac.EndpointResolverWithOptions
+	}
 	if ac.Credentials != nil {
 		c.Credentials = ac.Credentials
 	}
-	if ac.Endpoint != nil {
-		c.HostPorts = []string{*ac.Endpoint}
-	}
-	if ac.Region != nil {
-		c.Region = *ac.Region
-	}
+	c.Region = ac.Region
 }
 
-func (c *Config) requestOptions(read bool, ctx context.Context, opts ...request.Option) (client.RequestOptions, context.CancelFunc, error) {
+func (c *Config) requestOptions(read bool, ctx context.Context, opts ...func(*dynamodb.Options)) (client.RequestOptions, context.CancelFunc, error) {
 	r := c.WriteRetries
 	if read {
 		r = c.ReadRetries
 	}
 	var cfn context.CancelFunc
 	if ctx == nil && c.RequestTimeout > 0 {
-		ctx, cfn = context.WithTimeout(aws.BackgroundContext(), c.RequestTimeout)
+		ctx, cfn = context.WithTimeout(context.Background(), c.RequestTimeout)
 	}
 	opt := client.RequestOptions{
-		LogLevel:   c.LogLevel,
+		// LogLevel:   c.LogLevel,
 		Logger:     c.Logger,
 		MaxRetries: r,
 	}
 	if err := opt.MergeFromRequestOptions(ctx, opts...); err != nil {
-		if c.Logger != nil && c.LogLevel.AtLeast(aws.LogDebug) {
-			c.Logger.Log(fmt.Sprintf("DEBUG: Error in merging from Request Options : %s", err))
+		if c.Logger != nil { // && c.LogLevel.AtLeast(aws.LogDebug) {
+			c.Logger.Logf(logging.Debug, "DEBUG: Error in merging from Request Options : %s", err)
 		}
 		return client.RequestOptions{}, nil, err
 	}
 	return opt, cfn, nil
-}
-
-func buildHandlersForUnimplementedOperations() *request.Handlers {
-	h := &request.Handlers{}
-	h.Build.PushFrontNamed(request.NamedHandler{
-		Name: "dax.BuildHandler",
-		Fn: func(r *request.Request) {
-			r.Error = errors.New(client.ErrCodeNotImplemented)
-			return
-		}})
-	return h
-}
-
-var handlersForUnimplementedOperations = buildHandlersForUnimplementedOperations()
-
-func newRequestForUnimplementedOperation() *request.Request {
-	op := &request.Operation{Name: "Unimplemented"}
-	clientInfo := metadata.ClientInfo{ServiceName: "dax"}
-	req := request.New(aws.Config{}, clientInfo, *handlersForUnimplementedOperations, nil, op, nil, nil)
-	return req
 }

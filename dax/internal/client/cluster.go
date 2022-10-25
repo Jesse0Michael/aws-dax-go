@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -29,12 +30,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	awsv1 "github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/smithy-go/logging"
 )
 
 type serviceEndpoint struct {
@@ -63,15 +64,17 @@ type Config struct {
 	ClusterUpdateThreshold       time.Duration
 	ClusterUpdateInterval        time.Duration
 
-	HostPorts   []string
-	Region      string
-	Credentials *credentials.Credentials
-	DialContext func(ctx context.Context, network string, address string) (net.Conn, error)
-	connConfig  connConfig
+	HostPorts                   []string
+	EndpointResolver            aws.EndpointResolver
+	EndpointResolverWithOptions aws.EndpointResolverWithOptions
+	Region                      string
+	Credentials                 aws.CredentialsProvider
+	DialContext                 func(ctx context.Context, network string, address string) (net.Conn, error)
+	connConfig                  connConfig
 
 	SkipHostnameVerification bool
-	logger                   aws.Logger
-	logLevel                 aws.LogLevelType
+	logger                   logging.Logger
+	// logLevel                 aws.LogLevelType
 }
 
 type connConfig struct {
@@ -81,8 +84,8 @@ type connConfig struct {
 }
 
 func (cfg *Config) validate() error {
-	if cfg.HostPorts == nil || len(cfg.HostPorts) == 0 {
-		return awserr.New(request.ParamRequiredErrCode, "HostPorts is required", nil)
+	if cfg.EndpointResolver == nil && cfg.EndpointResolverWithOptions == nil && len(cfg.HostPorts) == 0 {
+		return awserr.New(request.ParamRequiredErrCode, "EndpointResolver or EndpointResolverWithOptions or HostPorts is required", nil)
 	}
 	if len(cfg.Region) == 0 {
 		return awserr.New(request.ParamRequiredErrCode, "Region is required", nil)
@@ -98,13 +101,13 @@ func (cfg *Config) validate() error {
 
 func (cfg *Config) validateConnConfig() {
 	if cfg.connConfig.isEncrypted && cfg.SkipHostnameVerification {
-		cfg.logger.Log(fmt.Sprintf("WARN: Skip hostname verification of TLS connections. The default is to perform hostname verification, setting this to True will skip verification. Be sure you understand the implication of doing so, which is the inability to authenticate the cluster that you are connecting to."))
+		cfg.logger.Logf(logging.Warn, "WARN: Skip hostname verification of TLS connections. The default is to perform hostname verification, setting this to True will skip verification. Be sure you understand the implication of doing so, which is the inability to authenticate the cluster that you are connecting to.")
 	}
 }
 
-func (cfg *Config) SetLogger(logger aws.Logger, logLevelType aws.LogLevelType) {
+func (cfg *Config) SetLogger(logger logging.Logger) {
 	cfg.logger = logger
-	cfg.logLevel = logLevelType
+	// cfg.logLevel = logLevelType
 }
 
 var defaultConfig = Config{
@@ -112,12 +115,12 @@ var defaultConfig = Config{
 	ClusterUpdateInterval:        time.Second * 4,
 	ClusterUpdateThreshold:       time.Millisecond * 125,
 
-	Credentials: defaults.CredChain(defaults.Config(), defaults.Handlers()),
+	Credentials: &aws.AnonymousCredentials{}, //defaults.CredChain(defaults.Config(), defaults.Handlers()),
 
 	connConfig:               connConfig{},
 	SkipHostnameVerification: false,
-	logger:                   aws.NewDefaultLogger(),
-	logLevel:                 aws.LogOff,
+	logger:                   logging.NewStandardLogger(os.Stdout),
+	// logLevel:                 aws.LogOff,
 }
 
 var defaultPorts = map[string]int{
@@ -288,7 +291,7 @@ func (cc *ClusterDaxClient) BatchGetItemWithOptions(input *dynamodb.BatchGetItem
 }
 
 func (cc *ClusterDaxClient) NewDaxRequest(op *request.Operation, input, output interface{}, opt RequestOptions) *request.Request {
-	req := request.New(aws.Config{}, clientInfo, *cc.handlers, nil, op, input, output)
+	req := request.New(awsv1.Config{}, clientInfo, *cc.handlers, nil, op, input, output)
 	opt.applyTo(req)
 	return req
 }
@@ -340,7 +343,7 @@ func (cc *ClusterDaxClient) retry(op string, action func(client DaxAPI, o Reques
 		retryDelay := opt.RetryDelay
 		if opt.SleepDelayFn == nil {
 			sleepFun = func() error {
-				return aws.SleepWithContext(ctx, retryDelay)
+				return awsv1.SleepWithContext(ctx, retryDelay)
 			}
 		} else {
 			sleepFun = func() error {
@@ -358,8 +361,8 @@ func (cc *ClusterDaxClient) retry(op string, action func(client DaxAPI, o Reques
 	var client DaxAPI
 	// Start from 0 to accomodate for the initial request
 	for i := 0; i <= attempts; i++ {
-		if i > 0 && opt.Logger != nil && opt.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
-			opt.Logger.Log(fmt.Sprintf("DEBUG: Retrying Request %s/%s, attempt %d", service, op, i))
+		if i > 0 && opt.Logger != nil { //&& opt.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
+			opt.Logger.Logf(logging.Debug, "DEBUG: Retrying Request %s/%s, attempt %d", service, op, i)
 		}
 		client, err = cc.cluster.client(client)
 		if err != nil {
@@ -381,7 +384,7 @@ func (cc *ClusterDaxClient) retry(op string, action func(client DaxAPI, o Reques
 			delay := opt.Retryer.RetryRules(&req)
 			if delay != 0 {
 				if opt.SleepDelayFn == nil {
-					aws.SleepWithContext(ctx, delay)
+					awsv1.SleepWithContext(ctx, delay)
 				} else {
 					opt.SleepDelayFn(delay)
 				}
@@ -391,19 +394,19 @@ func (cc *ClusterDaxClient) retry(op string, action func(client DaxAPI, o Reques
 				}
 			}
 
-			if err != nil && opt.Logger != nil && opt.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
-				opt.Logger.Log(fmt.Sprintf("DEBUG: Error in executing request %s/%s. : %s", service, op, err))
+			if err != nil && opt.Logger != nil { //&& opt.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
+				opt.Logger.Logf(logging.Debug, "DEBUG: Error in executing request %s/%s. : %s", service, op, err)
 			}
 		}
 	}
 	return err
 }
 
-func (cc *ClusterDaxClient) newContext(o RequestOptions) aws.Context {
+func (cc *ClusterDaxClient) newContext(o RequestOptions) context.Context {
 	if o.Context != nil {
 		return o.Context
 	}
-	return aws.BackgroundContext()
+	return context.Background()
 }
 
 func (cc *ClusterDaxClient) shouldRetry(o RequestOptions, err error) (request.Request, bool) {
@@ -435,7 +438,7 @@ func newCluster(cfg Config) (*cluster, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	seeds, hostname, isEncrypted, err := getHostPorts(cfg.HostPorts)
+	seeds, hostname, isEncrypted, err := getHostPorts(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -446,31 +449,60 @@ func newCluster(cfg Config) (*cluster, error) {
 	return &cluster{seeds: seeds, config: cfg, executor: newExecutor(), clientBuilder: &singleClientBuilder{}}, nil
 }
 
-func getHostPorts(hosts []string) (hostPorts []hostPort, hostname string, isEncrypted bool, err error) {
-	out := make([]hostPort, len(hosts))
+func getHostPorts(cfg Config) (hostPorts []hostPort, hostname string, isEncrypted bool, err error) {
+	var out []hostPort
 
 	handle := func(e error) (hostPorts []hostPort, hostname string, isEncrypted bool, err error) {
 		return nil, "", false, e
 	}
 
-	for i, hp := range hosts {
-		host, port, scheme, err := parseHostPort(hp)
+	handleHostPort := func(url string) error {
+		host, port, scheme, err := parseHostPort(url)
+		if err != nil {
+			return err
+		}
+
+		if isEncrypted != (scheme == "daxs") {
+			if len(out) == 0 {
+				isEncrypted = true
+			} else {
+				return awserr.New(request.ErrCodeRequestError, "Inconsistency between the schemes of provided endpoints.", nil)
+			}
+		}
+		if scheme == "daxs" && len(out) > 0 {
+			return awserr.New(request.InvalidParameterErrCode, "Only one cluster discovery endpoint may be provided for encrypted cluster", nil)
+		}
+		out = append(out, hostPort{host, port})
+		hostname = host
+		return nil
+	}
+
+	for _, hp := range cfg.HostPorts {
+		if err := handleHostPort(hp); err != nil {
+			return handle(err)
+		}
+	}
+
+	if cfg.EndpointResolver != nil {
+		endpoint, err := cfg.EndpointResolver.ResolveEndpoint("daxs", cfg.Region)
 		if err != nil {
 			return handle(err)
 		}
 
-		if isEncrypted != (scheme == "daxs") {
-			if i == 0 {
-				isEncrypted = true
-			} else {
-				return handle(awserr.New(request.ErrCodeRequestError, "Inconsistency between the schemes of provided endpoints.", nil))
-			}
+		if err := handleHostPort(endpoint.URL); err != nil {
+			return handle(err)
 		}
-		if scheme == "daxs" && i > 0 {
-			return handle(awserr.New(request.InvalidParameterErrCode, "Only one cluster discovery endpoint may be provided for encrypted cluster", nil))
+	}
+
+	if cfg.EndpointResolverWithOptions != nil {
+		endpoint, err := cfg.EndpointResolverWithOptions.ResolveEndpoint("daxs", cfg.Region)
+		if err != nil {
+			return handle(err)
 		}
-		out[i] = hostPort{host, port}
-		hostname = host
+
+		if err := handleHostPort(endpoint.URL); err != nil {
+			return handle(err)
+		}
 	}
 	return out, hostname, isEncrypted, nil
 }
@@ -599,7 +631,7 @@ func (c *cluster) refresh(force bool) error {
 func (c *cluster) refreshNow() error {
 	cfg, err := c.pullEndpoints()
 	if err != nil {
-		c.config.logger.Log(fmt.Sprintf("ERROR: Failed to refresh endpoint : %s", err))
+		c.config.logger.Logf(logging.Warn, "ERROR: Failed to refresh endpoint : %s", err)
 		return err
 	}
 	if !c.hasChanged(cfg) {
@@ -692,8 +724,8 @@ func (c *cluster) pullEndpoints() ([]serviceEndpoint, error) {
 				lastErr = err
 				continue
 			}
-			if c.config.logger != nil && c.config.logLevel.AtLeast(aws.LogDebug) {
-				c.config.logger.Log(fmt.Sprintf("DEBUG: Pulled endpoints from %s : %v", ip, endpoints))
+			if c.config.logger != nil { //&& c.config.logLevel.AtLeast(aws.LogDebug) {
+				c.config.logger.Logf(logging.Debug, "DEBUG: Pulled endpoints from %s : %v", ip, endpoints)
 			}
 			if len(endpoints) > 0 {
 				return endpoints, nil
@@ -709,7 +741,7 @@ func (c *cluster) pullEndpointsFrom(ip net.IP, port int) ([]serviceEndpoint, err
 		return nil, err
 	}
 	defer c.closeClient(client)
-	ctx, cfn := context.WithTimeout(aws.BackgroundContext(), 5*time.Second)
+	ctx, cfn := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cfn()
 	return client.endpoints(RequestOptions{MaxRetries: 2, Context: ctx})
 }
@@ -725,12 +757,12 @@ func (c *cluster) newSingleClient(cfg serviceEndpoint) (DaxAPI, error) {
 }
 
 type clientBuilder interface {
-	newClient(net.IP, int, connConfig, string, *credentials.Credentials, int, dialContext) (DaxAPI, error)
+	newClient(net.IP, int, connConfig, string, aws.CredentialsProvider, int, dialContext) (DaxAPI, error)
 }
 
 type singleClientBuilder struct{}
 
-func (*singleClientBuilder) newClient(ip net.IP, port int, connConfigData connConfig, region string, credentials *credentials.Credentials, maxPendingConnects int, dialContextFn dialContext) (DaxAPI, error) {
+func (*singleClientBuilder) newClient(ip net.IP, port int, connConfigData connConfig, region string, credentials aws.CredentialsProvider, maxPendingConnects int, dialContextFn dialContext) (DaxAPI, error) {
 	endpoint := fmt.Sprintf("%s:%d", ip, port)
 	return newSingleClientWithOptions(endpoint, connConfigData, region, credentials, maxPendingConnects, dialContextFn)
 }

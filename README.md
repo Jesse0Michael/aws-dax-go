@@ -42,7 +42,7 @@ func main() {
 	}
 	
 	
-	//Connecion to a secure cluster
+	//Connection to a secure cluster
 	secureEndpoint := "daxs://mycluster.frfx8h.clustercfg.dax.usw2.amazonaws.com"
 	secureCfg := dax.DefaultConfig()
 	secureCfg.HostPorts = []string{secureEndpoint}

@@ -17,6 +17,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net"
 	"reflect"
@@ -24,15 +25,16 @@ import (
 
 	"github.com/aws/aws-dax-go/dax/internal/cbor"
 	"github.com/aws/aws-dax-go/dax/internal/lru"
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
 )
 
 func TestDecodeError(t *testing.T) {
 	var b bytes.Buffer
 	errcode := []int{4, 37, 38, 39, 40}
-	awserr := awserr.NewRequestFailure(awserr.New(dynamodb.ErrCodeProvisionedThroughputExceededException, "ProvisionedThroughputExceededException Message", nil), 400, "request-1")
+	exception := &types.ProvisionedThroughputExceededException{}
+	awserr := awserr.NewRequestFailure(awserr.New(exception.ErrorCode(), "ProvisionedThroughputExceededException Message", nil), 400, "request-1")
 
 	w := cbor.NewWriter(&b)
 	w.WriteArrayHeader(len(errcode))
@@ -70,7 +72,8 @@ func TestDecodeError(t *testing.T) {
 
 func TestDecodeTransactionCanceledException(t *testing.T) {
 	errcode := []int{4, 37, 38, 39, 58}
-	awserr := awserr.NewRequestFailure(awserr.New(dynamodb.ErrCodeTransactionCanceledException, "TransactionCanceledException Message", nil), 400, "request-1")
+	exception := types.TransactionCanceledException{}
+	awserr := awserr.NewRequestFailure(awserr.New(exception.ErrorCode(), "TransactionCanceledException Message", nil), 400, "request-1")
 	reasonLen := 2
 	reasonCodes := []*string{aws.String("reasonCode1"), aws.String("reasonCode2")}
 	reasonMsgs := []*string{aws.String("reasonMsg1"), aws.String("reasonMsg2")}
@@ -137,41 +140,44 @@ func TestDecodeTransactionCanceledException(t *testing.T) {
 // TestDecodeTransactionCancellationReasons tests decoding transaction cancellations reasons in daxTransactionCanceledFailure.
 //
 // Specifically, the decoding of items in cancellation reasons are being testing here. It covers three situations:
-//    1. transact item didn't fail conditional check
-//    2. transact item failed conditional check and was configured to return ALL_OLD item
-//    3. transact item failed conditional check and was configured to return NONE item
+//  1. transact item didn't fail conditional check
+//  2. transact item failed conditional check and was configured to return ALL_OLD item
+//  3. transact item failed conditional check and was configured to return NONE item
 func TestDecodeTransactionCancellationReasons(t *testing.T) {
 	expCodes := []int{1, 2, 3, 4}
-	expErrCode := dynamodb.ErrCodeTransactionCanceledException
+	exception := &types.TransactionCanceledException{}
+	expErrCode := exception.ErrorCode()
+	condException := &types.ConditionalCheckFailedException{}
+	inProgException := types.TransactionInProgressException{}
 	expMsg := "Transaction was cancelled."
 	expReqID := "134213414395861"
 	expStatusCode := 400
 	expCanceledCodes := []*string{
 		aws.String("NONE"),
-		aws.String(dynamodb.ErrCodeConditionalCheckFailedException),
-		aws.String(dynamodb.ErrCodeTransactionInProgressException),
+		aws.String(condException.ErrorCode()),
+		aws.String(inProgException.ErrorCode()),
 	}
 	expCanceledReasons := []*string{
 		nil,
 		aws.String("first reason"),
 		aws.String("second reason"),
 	}
-	keyDef := []dynamodb.AttributeDefinition{
+	keyDef := []types.AttributeDefinition{
 		{AttributeName: aws.String("hk")},
 	}
-	keys := []map[string]*dynamodb.AttributeValue{
-		{"hk": &dynamodb.AttributeValue{N: aws.String("0")}},
-		{"hk": &dynamodb.AttributeValue{N: aws.String("0")}},
-		{"hk": &dynamodb.AttributeValue{N: aws.String("0")}},
+	keys := []map[string]types.AttributeValue{
+		{"hk": &types.AttributeValueMemberN{Value: "0"}},
+		{"hk": &types.AttributeValueMemberN{Value: "0"}},
+		{"hk": &types.AttributeValueMemberN{Value: "0"}},
 	}
-	canceledItems := []map[string]*dynamodb.AttributeValue{
+	canceledItems := []map[string]types.AttributeValue{
 		nil,
-		{"attr": &dynamodb.AttributeValue{N: aws.String("0")}},
+		{"attr": &types.AttributeValueMemberN{Value: "0"}},
 		nil,
 	}
 	attrs := []string{"attr"}
 	attrsToID := &lru.Lru{
-		LoadFunc: func(ctx aws.Context, key lru.Key) (interface{}, error) {
+		LoadFunc: func(ctx context.Context, key lru.Key) (interface{}, error) {
 			return int64(12345), nil
 		},
 		KeyMarshaller: func(key lru.Key) lru.Key {
@@ -186,7 +192,7 @@ func TestDecodeTransactionCancellationReasons(t *testing.T) {
 		},
 	}
 	idToAttrs := &lru.Lru{
-		LoadFunc: func(ctx aws.Context, key lru.Key) (interface{}, error) {
+		LoadFunc: func(ctx context.Context, key lru.Key) (interface{}, error) {
 			return attrs, nil
 		},
 	}
@@ -208,16 +214,16 @@ func TestDecodeTransactionCancellationReasons(t *testing.T) {
 		canceledItems[1][k] = v
 	}
 
-	expCancellationReason := []*dynamodb.CancellationReason{
-		&dynamodb.CancellationReason{
+	expCancellationReason := []types.CancellationReason{
+		types.CancellationReason{
 			Code: expCanceledCodes[0],
 		},
-		&dynamodb.CancellationReason{
+		types.CancellationReason{
 			Code:    expCanceledCodes[1],
 			Message: expCanceledReasons[1],
 			Item:    canceledItems[1],
 		},
-		&dynamodb.CancellationReason{
+		types.CancellationReason{
 			Code:    expCanceledCodes[2],
 			Message: expCanceledReasons[2],
 		},
@@ -246,7 +252,8 @@ func TestDecodeTransactionCancellationReasons(t *testing.T) {
 func TestDecodeNilErrorDetail(t *testing.T) {
 	var b bytes.Buffer
 	errcode := []int{4, 37, 38, 39, 43}
-	awserr := awserr.NewRequestFailure(awserr.New(dynamodb.ErrCodeConditionalCheckFailedException, "ConditionalCheckFailedException Message", nil), 400, "")
+	exception := types.ConditionalCheckFailedException{}
+	awserr := awserr.NewRequestFailure(awserr.New(exception.ErrorCode(), "ConditionalCheckFailedException Message", nil), 400, "")
 
 	w := cbor.NewWriter(&b)
 	w.WriteArrayHeader(len(errcode))
@@ -302,7 +309,7 @@ func TestTranslateError(t *testing.T) {
 		},
 		{
 			input:  new(net.UnknownNetworkError),
-			output: awserr.New(dynamodb.ErrCodeInternalServerError, "network error", new(net.UnknownNetworkError)),
+			output: awserr.New("InternalServerError", "network error", new(net.UnknownNetworkError)),
 		},
 		{
 			input:  errors.New("ex"),
