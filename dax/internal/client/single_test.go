@@ -12,9 +12,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-dax-go/dax/internal/cbor"
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,7 +82,8 @@ func TestExecuteErrorHandling(t *testing.T) {
 	}
 
 	for i, c := range cases {
-		cli, err := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
+
+		cli, err := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
 			return c.conn, nil
 		})
 		if err != nil {
@@ -91,7 +91,7 @@ func TestExecuteErrorHandling(t *testing.T) {
 		}
 		cli.pool.closeTubeImmediately = true
 
-		err = cli.executeWithContext(aws.BackgroundContext(), OpGetItem, c.enc, c.dec, RequestOptions{})
+		err = cli.executeWithContext(context.TODO(), OpGetItem, c.enc, c.dec, RequestOptions{})
 		if !reflect.DeepEqual(c.ee, err) {
 			t.Errorf("case[%d] expected error %v, got error %v", i, c.ee, err)
 		}
@@ -103,7 +103,7 @@ func TestExecuteErrorHandling(t *testing.T) {
 }
 
 func TestRetryPropogatesContextError(t *testing.T) {
-	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
+	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
 		return &mockConn{rd: []byte{cbor.Array + 0}}, nil
 	})
 	defer client.Close()
@@ -113,7 +113,7 @@ func TestRetryPropogatesContextError(t *testing.T) {
 
 	client.pool.closeTubeImmediately = true
 
-	ctx, cancel := context.WithCancel(aws.BackgroundContext())
+	ctx, cancel := context.WithCancel(context.TODO())
 	requestOptions := RequestOptions{
 		MaxRetries: 2,
 		Context:    ctx,
@@ -138,7 +138,7 @@ func TestRetryPropogatesContextError(t *testing.T) {
 }
 
 func TestRetryPropogatesOtherErrors(t *testing.T) {
-	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
+	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
 		return &mockConn{rd: []byte{cbor.Array + 0}}, nil
 	})
 	defer client.Close()
@@ -174,7 +174,7 @@ func TestRetryPropogatesOtherErrors(t *testing.T) {
 }
 
 func TestRetryPropogatesOtherErrorsWithDelay(t *testing.T) {
-	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
+	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
 		return &mockConn{rd: []byte{cbor.Array + 0}}, nil
 	})
 	defer client.Close()
@@ -211,7 +211,7 @@ func TestRetryPropogatesOtherErrorsWithDelay(t *testing.T) {
 }
 
 func TestRetrySleepCycleCount(t *testing.T) {
-	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
+	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
 		return &mockConn{rd: []byte{cbor.Array + 0}}, nil
 	})
 	defer client.Close()
@@ -246,7 +246,7 @@ func TestRetrySleepCycleCount(t *testing.T) {
 }
 
 func TestRetryLastError(t *testing.T) {
-	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
+	client, clientErr := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, func(ctx context.Context, a, n string) (net.Conn, error) {
 		return &mockConn{rd: []byte{cbor.Array + 0}}, nil
 	})
 	defer client.Close()
@@ -291,7 +291,7 @@ func TestSingleClient_customDialer(t *testing.T) {
 	var dialContextFn dialContext = func(ctx context.Context, address string, network string) (net.Conn, error) {
 		return conn, nil
 	}
-	client, err := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentials("id", "secret", "tok"), 1, dialContextFn)
+	client, err := newSingleClientWithOptions(":9121", unEncryptedConnConfig, "us-west-2", credentials.NewStaticCredentialsProvider("id", "secret", "tok"), 1, dialContextFn)
 	require.NoError(t, err)
 	defer client.Close()
 

@@ -6,9 +6,9 @@ is used to test pagination logic.
 package client
 
 import (
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	awsv1 "github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
 )
 
 type ClientStub struct {
@@ -56,11 +56,13 @@ func (stub *ClientStub) GetItemWithOptions(input *dynamodb.GetItemInput, output 
 }
 
 func (stub *ClientStub) ScanWithOptions(input *dynamodb.ScanInput, output *dynamodb.ScanOutput, opt RequestOptions) (*dynamodb.ScanOutput, error) {
+	stub.scanRequests = append(stub.scanRequests, input)
 	output, stub.scanResponses = stub.scanResponses[0], stub.scanResponses[1:]
 	return output, nil
 }
 
 func (stub *ClientStub) QueryWithOptions(input *dynamodb.QueryInput, output *dynamodb.QueryOutput, opt RequestOptions) (*dynamodb.QueryOutput, error) {
+	stub.queryRequests = append(stub.queryRequests, input)
 	output, stub.queryResponses = stub.queryResponses[0], stub.queryResponses[1:]
 	return output, nil
 }
@@ -87,7 +89,7 @@ func (stub *ClientStub) NewDaxRequest(op *request.Operation, input, output inter
 	h.Build.PushFrontNamed(request.NamedHandler{Name: "dax.BuildHandler", Fn: stub.build})
 	h.Send.PushFrontNamed(request.NamedHandler{Name: "dax.SendHandler", Fn: stub.send})
 
-	req := request.New(aws.Config{}, clientInfo, h, nil, op, input, output)
+	req := request.New(awsv1.Config{}, clientInfo, h, nil, op, input, output)
 	opt.applyTo(req)
 	return req
 }

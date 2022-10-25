@@ -17,17 +17,19 @@ package client
 
 import (
 	"bytes"
-	"fmt"
+	"context"
 	"time"
 
 	"github.com/aws/aws-dax-go/dax/internal/cbor"
 	"github.com/aws/aws-dax-go/dax/internal/lru"
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	awsv1 "github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/client/metadata"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/smithy-go/logging"
 )
 
 const (
@@ -67,7 +69,7 @@ const (
 
 type SingleDaxClient struct {
 	region             string
-	credentials        *credentials.Credentials
+	credentials        aws.CredentialsProvider
 	tubeAuthWindowSecs int64
 
 	handlers          *request.Handlers
@@ -77,11 +79,11 @@ type SingleDaxClient struct {
 	attrListIdToNames *lru.Lru
 }
 
-func NewSingleClient(endpoint string, connConfigData connConfig, region string, credentials *credentials.Credentials) (*SingleDaxClient, error) {
+func NewSingleClient(endpoint string, connConfigData connConfig, region string, credentials aws.CredentialsProvider) (*SingleDaxClient, error) {
 	return newSingleClientWithOptions(endpoint, connConfigData, region, credentials, -1, defaultDialer.DialContext)
 }
 
-func newSingleClientWithOptions(endpoint string, connConfigData connConfig, region string, credentials *credentials.Credentials, maxPendingConnections int, dialContextFn dialContext) (*SingleDaxClient, error) {
+func newSingleClientWithOptions(endpoint string, connConfigData connConfig, region string, credentials aws.CredentialsProvider, maxPendingConnections int, dialContextFn dialContext) (*SingleDaxClient, error) {
 	po := defaultTubePoolOptions
 	if maxPendingConnections > 0 {
 		po.maxConcurrentConnAttempts = maxPendingConnections
@@ -99,13 +101,13 @@ func newSingleClientWithOptions(endpoint string, connConfigData connConfig, regi
 	client.handlers = client.buildHandlers()
 	client.keySchema = &lru.Lru{
 		MaxEntries: keySchemaLruCacheSize,
-		LoadFunc: func(ctx aws.Context, key lru.Key) (interface{}, error) {
+		LoadFunc: func(ctx context.Context, key lru.Key) (interface{}, error) {
 			table, ok := key.(string)
 			if !ok {
 				return nil, awserr.New(request.ErrCodeSerialization, "unexpected type for table name", nil)
 			}
 			if ctx == nil {
-				ctx = aws.BackgroundContext()
+				ctx = context.Background()
 			}
 			return client.defineKeySchema(ctx, table)
 		},
@@ -113,13 +115,13 @@ func newSingleClientWithOptions(endpoint string, connConfigData connConfig, regi
 
 	client.attrNamesListToId = &lru.Lru{
 		MaxEntries: attributeListLruCacheSize,
-		LoadFunc: func(ctx aws.Context, key lru.Key) (interface{}, error) {
+		LoadFunc: func(ctx context.Context, key lru.Key) (interface{}, error) {
 			attrNames, ok := key.([]string)
 			if !ok {
 				return nil, awserr.New(request.ErrCodeSerialization, "unexpected type for attribute list", nil)
 			}
 			if ctx == nil {
-				ctx = aws.BackgroundContext()
+				ctx = context.Background()
 			}
 			return client.defineAttributeListId(ctx, attrNames)
 		},
@@ -137,13 +139,13 @@ func newSingleClientWithOptions(endpoint string, connConfigData connConfig, regi
 
 	client.attrListIdToNames = &lru.Lru{
 		MaxEntries: attributeListLruCacheSize,
-		LoadFunc: func(ctx aws.Context, key lru.Key) (interface{}, error) {
+		LoadFunc: func(ctx context.Context, key lru.Key) (interface{}, error) {
 			id, ok := key.(int64)
 			if !ok {
 				return nil, awserr.New(request.ErrCodeSerialization, "unexpected type for attribute list id", nil)
 			}
 			if ctx == nil {
-				ctx = aws.BackgroundContext()
+				ctx = context.Background()
 			}
 			return client.defineAttributeList(ctx, id)
 		},
@@ -175,7 +177,7 @@ func (client *SingleDaxClient) endpoints(opt RequestOptions) ([]serviceEndpoint,
 	return out, nil
 }
 
-func (client *SingleDaxClient) defineAttributeListId(ctx aws.Context, attrNames []string) (int64, error) {
+func (client *SingleDaxClient) defineAttributeListId(ctx context.Context, attrNames []string) (int64, error) {
 	if len(attrNames) == 0 {
 		return emptyAttributeListId, nil
 	}
@@ -195,7 +197,7 @@ func (client *SingleDaxClient) defineAttributeListId(ctx aws.Context, attrNames 
 	return out, nil
 }
 
-func (client *SingleDaxClient) defineAttributeList(ctx aws.Context, id int64) ([]string, error) {
+func (client *SingleDaxClient) defineAttributeList(ctx context.Context, id int64) ([]string, error) {
 	if id == emptyAttributeListId {
 		return []string{}, nil
 	}
@@ -215,11 +217,11 @@ func (client *SingleDaxClient) defineAttributeList(ctx aws.Context, id int64) ([
 	return out, nil
 }
 
-func (client *SingleDaxClient) defineKeySchema(ctx aws.Context, table string) ([]dynamodb.AttributeDefinition, error) {
+func (client *SingleDaxClient) defineKeySchema(ctx context.Context, table string) ([]types.AttributeDefinition, error) {
 	encoder := func(writer *cbor.Writer) error {
 		return encodeDefineKeySchemaInput(table, writer)
 	}
-	var out []dynamodb.AttributeDefinition
+	var out []types.AttributeDefinition
 	var err error
 	decoder := func(reader *cbor.Reader) error {
 		out, err = decodeDefineKeySchemaOutput(reader)
@@ -353,7 +355,7 @@ func (client *SingleDaxClient) BatchGetItemWithOptions(input *dynamodb.BatchGetI
 }
 
 func (client *SingleDaxClient) TransactWriteItemsWithOptions(input *dynamodb.TransactWriteItemsInput, output *dynamodb.TransactWriteItemsOutput, opt RequestOptions) (*dynamodb.TransactWriteItemsOutput, error) {
-	extractedKeys := make([]map[string]*dynamodb.AttributeValue, len(input.TransactItems))
+	extractedKeys := make([]map[string]types.AttributeValue, len(input.TransactItems))
 	encoder := func(writer *cbor.Writer) error {
 		return encodeTransactWriteItemsInput(opt.Context, input, client.keySchema, client.attrNamesListToId, writer, extractedKeys)
 	}
@@ -364,7 +366,7 @@ func (client *SingleDaxClient) TransactWriteItemsWithOptions(input *dynamodb.Tra
 	}
 	if err = client.executeWithRetries(OpBatchWriteItem, opt, encoder, decoder); err != nil {
 		if failure, ok := err.(*daxTransactionCanceledFailure); ok {
-			var cancellationReasons []*dynamodb.CancellationReason
+			var cancellationReasons []types.CancellationReason
 			if cancellationReasons, err = decodeTransactionCancellationReasons(opt.Context, failure, extractedKeys, client.attrListIdToNames); err != nil {
 				return output, err
 			}
@@ -377,7 +379,7 @@ func (client *SingleDaxClient) TransactWriteItemsWithOptions(input *dynamodb.Tra
 }
 
 func (client *SingleDaxClient) TransactGetItemsWithOptions(input *dynamodb.TransactGetItemsInput, output *dynamodb.TransactGetItemsOutput, opt RequestOptions) (*dynamodb.TransactGetItemsOutput, error) {
-	extractedKeys := make([]map[string]*dynamodb.AttributeValue, len(input.TransactItems))
+	extractedKeys := make([]map[string]types.AttributeValue, len(input.TransactItems))
 	encoder := func(writer *cbor.Writer) error {
 		return encodeTransactGetItemsInput(opt.Context, input, client.keySchema, writer, extractedKeys)
 	}
@@ -388,7 +390,7 @@ func (client *SingleDaxClient) TransactGetItemsWithOptions(input *dynamodb.Trans
 	}
 	if err = client.executeWithRetries(OpBatchWriteItem, opt, encoder, decoder); err != nil {
 		if failure, ok := err.(*daxTransactionCanceledFailure); ok {
-			var cancellationReasons []*dynamodb.CancellationReason
+			var cancellationReasons []types.CancellationReason
 			if cancellationReasons, err = decodeTransactionCancellationReasons(opt.Context, failure, extractedKeys, client.attrListIdToNames); err != nil {
 				return output, err
 			}
@@ -401,7 +403,7 @@ func (client *SingleDaxClient) TransactGetItemsWithOptions(input *dynamodb.Trans
 }
 
 func (client *SingleDaxClient) NewDaxRequest(op *request.Operation, input, output interface{}, opt RequestOptions) *request.Request {
-	req := request.New(aws.Config{}, clientInfo, *client.handlers, nil, op, input, output)
+	req := request.New(awsv1.Config{}, clientInfo, *client.handlers, nil, op, input, output)
 	opt.applyTo(req)
 	return req
 }
@@ -504,7 +506,7 @@ func (client *SingleDaxClient) build(req *request.Request) {
 			req.Error = awserr.New(request.ErrCodeSerialization, "expected *TransactGetItemsInput", nil)
 			return
 		}
-		extractedKeys := make([]map[string]*dynamodb.AttributeValue, len(input.TransactItems))
+		extractedKeys := make([]map[string]types.AttributeValue, len(input.TransactItems))
 		if err := encodeTransactGetItemsInput(req.Context(), input, client.keySchema, w, extractedKeys); err != nil {
 			req.Error = translateError(err)
 			return
@@ -515,7 +517,7 @@ func (client *SingleDaxClient) build(req *request.Request) {
 			req.Error = awserr.New(request.ErrCodeSerialization, "expected *TransactWriteItemsInput", nil)
 			return
 		}
-		extractedKeys := make([]map[string]*dynamodb.AttributeValue, len(input.TransactItems))
+		extractedKeys := make([]map[string]types.AttributeValue, len(input.TransactItems))
 		if err := encodeTransactWriteItemsInput(req.Context(), input, client.keySchema, client.attrNamesListToId, w, extractedKeys); err != nil {
 			req.Error = translateError(err)
 			return
@@ -574,6 +576,7 @@ func (client *SingleDaxClient) send(req *request.Request) {
 		input, ok := req.Params.(*dynamodb.BatchGetItemInput)
 		if !ok {
 			req.Error = awserr.New(request.ErrCodeSerialization, "expected *BatchGetItemInput", nil)
+
 			return
 		}
 		output, ok := req.Data.(*dynamodb.BatchGetItemOutput)
@@ -660,11 +663,11 @@ func (client *SingleDaxClient) send(req *request.Request) {
 	}
 }
 
-func (client *SingleDaxClient) newContext(o RequestOptions) aws.Context {
+func (client *SingleDaxClient) newContext(o RequestOptions) context.Context {
 	if o.Context != nil {
 		return o.Context
 	}
-	return aws.BackgroundContext()
+	return context.Background()
 }
 
 func (client *SingleDaxClient) executeWithRetries(op string, o RequestOptions, encoder func(writer *cbor.Writer) error, decoder func(reader *cbor.Reader) error) error {
@@ -675,7 +678,7 @@ func (client *SingleDaxClient) executeWithRetries(op string, o RequestOptions, e
 		retryDelay := o.RetryDelay
 		if o.SleepDelayFn == nil {
 			sleepFun = func() error {
-				return aws.SleepWithContext(ctx, retryDelay)
+				return awsv1.SleepWithContext(ctx, retryDelay)
 			}
 		} else {
 			sleepFun = func() error {
@@ -689,8 +692,8 @@ func (client *SingleDaxClient) executeWithRetries(op string, o RequestOptions, e
 	attempts := o.MaxRetries
 	// Start from 0 to accommodate for the initial request
 	for i := 0; i <= attempts; i++ {
-		if i > 0 && o.Logger != nil && o.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
-			o.Logger.Log(fmt.Sprintf("DEBUG: Retrying Request %s/%s, attempt %d", service, op, i))
+		if i > 0 && o.Logger != nil { // && o.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
+			o.Logger.Logf(logging.Debug, "DEBUG: Retrying Request %s/%s, attempt %d", service, op, i)
 		}
 
 		if err = client.executeWithContext(ctx, op, encoder, decoder, o); err == nil {
@@ -705,15 +708,15 @@ func (client *SingleDaxClient) executeWithRetries(op string, o RequestOptions, e
 			}
 		}
 
-		if o.Logger != nil && o.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
-			o.Logger.Log(fmt.Sprintf("DEBUG: Error in executing %s%s : %s", service, op, err))
+		if o.Logger != nil { // && o.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
+			o.Logger.Logf(logging.Debug, "DEBUG: Error in executing %s%s : %s", service, op, err)
 		}
 	}
 	// Return the last error occurred
 	return translateError(err)
 }
 
-func (client *SingleDaxClient) executeWithContext(ctx aws.Context, op string, encoder func(writer *cbor.Writer) error, decoder func(reader *cbor.Reader) error, opt RequestOptions) error {
+func (client *SingleDaxClient) executeWithContext(ctx context.Context, op string, encoder func(writer *cbor.Writer) error, decoder func(reader *cbor.Reader) error, opt RequestOptions) error {
 	t, err := client.pool.getWithContext(ctx, client.isHighPriority(op), opt)
 	if err != nil {
 		return err
@@ -723,7 +726,7 @@ func (client *SingleDaxClient) executeWithContext(ctx aws.Context, op string, en
 		return err
 	}
 
-	if err = client.auth(t); err != nil {
+	if err = client.auth(ctx, t); err != nil {
 		client.pool.discard(t)
 		return err
 	}
@@ -791,9 +794,9 @@ func (client *SingleDaxClient) recycleTube(t tube, err error) {
 		client.pool.discard(t)
 	}
 }
-func (client *SingleDaxClient) auth(t tube) error {
+func (client *SingleDaxClient) auth(ctx context.Context, t tube) error {
 	// TODO credentials.Get() cause a throughput drop of ~25 with 250 goroutines with DefaultCredentialChain (only instance profile credentials available)
-	creds, err := client.credentials.Get()
+	creds, err := client.credentials.Retrieve(ctx)
 	if err != nil {
 		return err
 	}

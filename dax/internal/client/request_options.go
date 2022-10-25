@@ -16,17 +16,21 @@
 package client
 
 import (
+	"context"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	awsv1 "github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/client/metadata"
 	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/smithy-go/logging"
 )
 
 type RequestOptions struct {
-	LogLevel aws.LogLevelType
-	Logger   aws.Logger
+	// LogLevel aws.LogLevelType
+	Logger logging.Logger
 
 	RetryDelay time.Duration
 	//Retryer implements equal jitter backoff stratergy for throttled requests
@@ -34,13 +38,13 @@ type RequestOptions struct {
 	MaxRetries int
 	//SleepDelayFn is used for non-throttled retryable requests
 	SleepDelayFn func(time.Duration)
-	Context      aws.Context
+	Context      context.Context
 }
 
 func (o *RequestOptions) applyTo(r *request.Request) {
 	if r != nil {
-		r.Config.LogLevel = aws.LogLevel(o.LogLevel)
-		r.Config.Logger = o.Logger
+		// r.Config.LogLevel = aws.LogLevel(o.LogLevel)
+		// r.Config.Logger = o.Logger
 
 		r.RetryDelay = o.RetryDelay
 		r.Config.MaxRetries = aws.Int(o.MaxRetries)
@@ -51,16 +55,25 @@ func (o *RequestOptions) applyTo(r *request.Request) {
 	}
 }
 
-func (o *RequestOptions) MergeFromRequestOptions(ctx aws.Context, opts ...request.Option) error {
-	if len(opts) == 0 {
+func (o *RequestOptions) MergeFromRequestOptions(ctx context.Context, optFns ...func(*dynamodb.Options)) error {
+	if len(optFns) == 0 {
 		if ctx != nil {
 			o.Context = ctx
 		}
 		return nil
 	}
 
+	opts := make([]request.Option, 0)
+	for _, optFn := range optFns {
+		f := func(o *request.Request) {
+			opt := dynamodb.Options{}
+			optFn(&opt)
+		}
+		opts = append(opts, f)
+	}
+
 	// New request has to be created to avoid panics when setting fields
-	r := request.New(aws.Config{}, metadata.ClientInfo{}, request.Handlers{}, nil, &request.Operation{}, nil, nil)
+	r := request.New(awsv1.Config{}, metadata.ClientInfo{}, request.Handlers{}, nil, &request.Operation{}, nil, nil)
 	r.ApplyOptions(opts...)
 	if err := o.mergeFromRequest(r, true); err != nil {
 		return err
@@ -80,12 +93,12 @@ func (o *RequestOptions) mergeFromRequest(r *request.Request, validate bool) err
 			return err
 		}
 	}
-	if r.Config.LogLevel != nil {
-		o.LogLevel = *r.Config.LogLevel
-	}
-	if r.Config.Logger != nil {
-		o.Logger = r.Config.Logger
-	}
+	// if r.Config.LogLevel != nil {
+	// 	o.LogLevel = *r.Config.LogLevel
+	// }
+	// if r.Config.Logger != nil {
+	// 	o.Logger = r.Config.Logger
+	// }
 	if r.RetryDelay >= 0 {
 		o.RetryDelay = r.RetryDelay
 	}
@@ -134,7 +147,7 @@ func ValidateHandlers(h request.Handlers, expectDaxHandlers bool) error {
 	return nil
 }
 
-func ValidateConfig(c aws.Config, isRequestConfig bool) error {
+func ValidateConfig(c awsv1.Config, isRequestConfig bool) error {
 	if c.CredentialsChainVerboseErrors != nil {
 		return awserr.New(request.InvalidParameterErrCode, "unsupported config: CredentialsChainVerboseErrors", nil)
 	}

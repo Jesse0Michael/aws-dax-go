@@ -17,16 +17,16 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 
 	"github.com/aws/aws-dax-go/dax/internal/cbor"
 	"github.com/aws/aws-dax-go/dax/internal/lru"
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/private/protocol"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
 )
 
 const (
@@ -52,7 +52,7 @@ type daxTransactionCanceledFailure struct {
 	cancellationReasonCodes []*string
 	cancellationReasonMsgs  []*string
 	cancellationReasonItems []byte
-	cancellationReasons     []*dynamodb.CancellationReason
+	cancellationReasons     []types.CancellationReason
 }
 
 func newDaxRequestFailure(codes []int, errorCode, message, requestId string, statusCode int) *daxRequestFailure {
@@ -95,7 +95,7 @@ func translateError(err error) awserr.Error {
 		return e
 	case net.Error:
 		e := err.(net.Error)
-		code := dynamodb.ErrCodeInternalServerError
+		code := "InternalServerError" //types.ErrCodeInternalServerError
 		if e.Timeout() {
 			code = request.ErrCodeResponseTimeout
 		}
@@ -239,23 +239,23 @@ func convertDaxError(e daxError) error {
 	if len(codes) < 2 {
 		return e
 	}
-	md := protocol.ResponseMetadata{
-		StatusCode: e.StatusCode(),
-		RequestID:  e.RequestID(),
-	}
+	// md := protocol.ResponseMetadata{
+	// 	StatusCode: e.StatusCode(),
+	// 	RequestID:  e.RequestID(),
+	// }
 	switch codes[1] {
 	case 23:
 		if len(codes) > 2 {
 			switch codes[2] {
 			case 24:
-				return &dynamodb.ResourceNotFoundException{
-					RespMetadata: md,
-					Message_:     aws.String(e.Message()),
+				return &types.ResourceNotFoundException{
+					// RespMetadata: md,
+					Message: aws.String(e.Message()),
 				}
 			case 35:
-				return &dynamodb.ResourceInUseException{
-					RespMetadata: md,
-					Message_:     aws.String(e.Message()),
+				return &types.ResourceInUseException{
+					// RespMetadata: md,
+					Message: aws.String(e.Message()),
 				}
 			}
 		}
@@ -266,68 +266,68 @@ func convertDaxError(e daxError) error {
 				if len(codes) > 4 {
 					switch codes[4] {
 					case 40:
-						return &dynamodb.ProvisionedThroughputExceededException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.ProvisionedThroughputExceededException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 41:
-						return &dynamodb.ResourceNotFoundException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.ResourceNotFoundException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 43:
-						return &dynamodb.ConditionalCheckFailedException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.ConditionalCheckFailedException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 45:
-						return &dynamodb.ResourceInUseException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message())}
+						return &types.ResourceInUseException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message())}
 					case 46:
 						// there's no dynamodb.ValidationException type
 						return awserr.NewRequestFailure(awserr.New(ErrCodeValidationException, e.Message(), nil), e.StatusCode(), e.RequestID())
 					case 47:
-						return &dynamodb.InternalServerError{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.InternalServerError{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 48:
-						return &dynamodb.ItemCollectionSizeLimitExceededException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.ItemCollectionSizeLimitExceededException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 49:
-						return &dynamodb.LimitExceededException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.LimitExceededException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 50:
 						// there's no dynamodb.ThrottlingException type
 						return awserr.NewRequestFailure(awserr.New(ErrCodeThrottlingException, e.Message(), nil), e.StatusCode(), e.RequestID())
 					case 57:
-						return &dynamodb.TransactionConflictException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.TransactionConflictException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 58:
 						tcFailure, ok := e.(*daxTransactionCanceledFailure)
 						if ok {
-							return &dynamodb.TransactionCanceledException{
-								RespMetadata:        md,
-								Message_:            aws.String(e.Message()),
+							return &types.TransactionCanceledException{
+								// RespMetadata:        md,
+								Message:             aws.String(e.Message()),
 								CancellationReasons: tcFailure.cancellationReasons,
 							}
 						}
 					case 59:
-						return &dynamodb.TransactionInProgressException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.TransactionInProgressException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					case 60:
-						return &dynamodb.IdempotentParameterMismatchException{
-							RespMetadata: md,
-							Message_:     aws.String(e.Message()),
+						return &types.IdempotentParameterMismatchException{
+							// RespMetadata: md,
+							Message: aws.String(e.Message()),
 						}
 					}
 				}
@@ -339,17 +339,17 @@ func convertDaxError(e daxError) error {
 	return awserr.NewRequestFailure(awserr.New(ErrCodeUnknown, e.Message(), nil), e.StatusCode(), e.RequestID())
 }
 
-func decodeTransactionCancellationReasons(ctx aws.Context, failure *daxTransactionCanceledFailure,
-	keys []map[string]*dynamodb.AttributeValue, attrListIdToNames *lru.Lru) ([]*dynamodb.CancellationReason, error) {
+func decodeTransactionCancellationReasons(ctx context.Context, failure *daxTransactionCanceledFailure,
+	keys []map[string]types.AttributeValue, attrListIdToNames *lru.Lru) ([]types.CancellationReason, error) {
 	inputL := len(keys)
 	outputL := len(failure.cancellationReasonCodes)
 	if inputL != outputL {
 		return nil, awserr.New(request.ErrCodeSerialization, "Cancellation reasons must be the same length as transact items in the request", nil)
 	}
-	reasons := make([]*dynamodb.CancellationReason, outputL)
+	reasons := make([]types.CancellationReason, outputL)
 	r := cbor.NewReader(bytes.NewReader(failure.cancellationReasonItems))
 	for i := 0; i < outputL; i++ {
-		reason := new(dynamodb.CancellationReason)
+		reason := types.CancellationReason{}
 		reason.Code = failure.cancellationReasonCodes[i]
 		reason.Message = failure.cancellationReasonMsgs[i]
 		if consumed, err := consumeNil(r); err != nil {

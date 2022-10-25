@@ -20,17 +20,21 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -190,99 +194,100 @@ func TestClusterDaxClient_retryReturnsCorrectErrorType(t *testing.T) {
 		codes []int
 
 		// output
-		errCode string
+		errCode smithy.APIError
 		class   reflect.Type
 	}{
 		{
 			codes:   []int{4, 23, 24},
-			errCode: dynamodb.ErrCodeResourceNotFoundException,
-			class:   reflect.TypeOf(&dynamodb.ResourceNotFoundException{}),
+			errCode: &types.ResourceNotFoundException{},
+			class:   reflect.TypeOf(&types.ResourceNotFoundException{}),
 		},
 		{
 			codes:   []int{4, 23, 35},
-			errCode: dynamodb.ErrCodeResourceInUseException,
-			class:   reflect.TypeOf(&dynamodb.ResourceInUseException{}),
+			errCode: &types.ResourceInUseException{},
+			class:   reflect.TypeOf(&types.ResourceInUseException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 40},
-			errCode: dynamodb.ErrCodeProvisionedThroughputExceededException,
-			class:   reflect.TypeOf(&dynamodb.ProvisionedThroughputExceededException{}),
+			errCode: &types.ProvisionedThroughputExceededException{},
+			class:   reflect.TypeOf(&types.ProvisionedThroughputExceededException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 40},
-			errCode: dynamodb.ErrCodeProvisionedThroughputExceededException,
-			class:   reflect.TypeOf(&dynamodb.ProvisionedThroughputExceededException{}),
+			errCode: &types.ProvisionedThroughputExceededException{},
+			class:   reflect.TypeOf(&types.ProvisionedThroughputExceededException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 41},
-			errCode: dynamodb.ErrCodeResourceNotFoundException,
-			class:   reflect.TypeOf(&dynamodb.ResourceNotFoundException{}),
+			errCode: &types.ResourceNotFoundException{},
+			class:   reflect.TypeOf(&types.ResourceNotFoundException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 43},
-			errCode: dynamodb.ErrCodeConditionalCheckFailedException,
-			class:   reflect.TypeOf(&dynamodb.ConditionalCheckFailedException{}),
+			errCode: &types.ConditionalCheckFailedException{},
+			class:   reflect.TypeOf(&types.ConditionalCheckFailedException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 45},
-			errCode: dynamodb.ErrCodeResourceInUseException,
-			class:   reflect.TypeOf(&dynamodb.ResourceInUseException{}),
+			errCode: &types.ResourceInUseException{},
+			class:   reflect.TypeOf(&types.ResourceInUseException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 46},
-			errCode: ErrCodeValidationException,
+			errCode: &smithy.GenericAPIError{Code: ErrCodeValidationException},
 			class:   reflect.TypeOf(awserr.NewRequestFailure(nil, 0, "")),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 47},
-			errCode: dynamodb.ErrCodeInternalServerError,
-			class:   reflect.TypeOf(&dynamodb.InternalServerError{}),
+			errCode: &types.InternalServerError{},
+			class:   reflect.TypeOf(&types.InternalServerError{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 48},
-			errCode: dynamodb.ErrCodeItemCollectionSizeLimitExceededException,
-			class:   reflect.TypeOf(&dynamodb.ItemCollectionSizeLimitExceededException{}),
+			errCode: &types.ItemCollectionSizeLimitExceededException{},
+			class:   reflect.TypeOf(&types.ItemCollectionSizeLimitExceededException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 49},
-			errCode: dynamodb.ErrCodeLimitExceededException,
-			class:   reflect.TypeOf(&dynamodb.LimitExceededException{}),
+			errCode: &types.LimitExceededException{},
+			class:   reflect.TypeOf(&types.LimitExceededException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 50},
-			errCode: ErrCodeThrottlingException,
+			errCode: &smithy.GenericAPIError{Code: ErrCodeThrottlingException},
 			class:   reflect.TypeOf(awserr.NewRequestFailure(nil, 0, "")),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 57},
-			errCode: dynamodb.ErrCodeTransactionConflictException,
-			class:   reflect.TypeOf(&dynamodb.TransactionConflictException{}),
+			errCode: &types.TransactionConflictException{},
+			class:   reflect.TypeOf(&types.TransactionConflictException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 58},
-			errCode: dynamodb.ErrCodeTransactionCanceledException,
-			class:   reflect.TypeOf(&dynamodb.TransactionCanceledException{}),
+			errCode: &types.TransactionCanceledException{},
+			class:   reflect.TypeOf(&types.TransactionCanceledException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 59},
-			errCode: dynamodb.ErrCodeTransactionInProgressException,
-			class:   reflect.TypeOf(&dynamodb.TransactionInProgressException{}),
+			errCode: &types.TransactionInProgressException{},
+			class:   reflect.TypeOf(&types.TransactionInProgressException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 39, 60},
-			errCode: dynamodb.ErrCodeIdempotentParameterMismatchException,
-			class:   reflect.TypeOf(&dynamodb.IdempotentParameterMismatchException{}),
+			errCode: &types.IdempotentParameterMismatchException{},
+			class:   reflect.TypeOf(&types.IdempotentParameterMismatchException{}),
 		},
 		{
 			codes:   []int{4, 37, 38, 44},
-			errCode: ErrCodeNotImplemented,
+			errCode: &smithy.GenericAPIError{Code: ErrCodeNotImplemented},
 			class:   reflect.TypeOf(awserr.NewRequestFailure(nil, 0, "")),
 		},
 	}
 
 	for _, c := range cases {
 		action := func(client DaxAPI, o RequestOptions) error {
-			if c.errCode == dynamodb.ErrCodeTransactionCanceledException {
+			canceledException := &types.TransactionCanceledException{}
+			if c.errCode.ErrorCode() == canceledException.ErrorCode() {
 				return newDaxTransactionCanceledFailure(c.codes, defaultErrCode, message, requestID, statusCode, nil, nil, nil)
 			}
 			return newDaxRequestFailure(c.codes, defaultErrCode, message, requestID, statusCode)
@@ -297,18 +302,24 @@ func TestClusterDaxClient_retryReturnsCorrectErrorType(t *testing.T) {
 		if actualClass != c.class {
 			t.Errorf("conversion of code sequence %v failed: expected %s, but got %s", c.codes, c.class.String(), actualClass.String())
 		}
-		f, _ := err.(awserr.RequestFailure)
-		require.NotNilf(t, f, "conversion of code sequence %v failed: expected implement awserr.Error", c.codes)
-		require.Equal(t, c.errCode, f.Code())
-		require.Equal(t, statusCode, f.StatusCode())
-		require.Equal(t, requestID, f.RequestID())
-		require.Equal(t, message, f.Message())
+		switch f := err.(type) {
+		case smithy.APIError:
+			require.Equal(t, c.errCode.ErrorCode(), f.ErrorCode())
+		case awserr.RequestFailure:
+			require.Equal(t, c.errCode.ErrorCode(), f.Code())
+			require.Equal(t, statusCode, f.StatusCode())
+			require.Equal(t, requestID, f.RequestID())
+			require.Equal(t, message, f.Message())
+		default:
+			t.Errorf("conversion of code sequence %v failed: expected implement awserr.Error or smithy.APIError", c.codes)
+		}
+
 	}
 }
 
 func TestCluster_parseHostPorts(t *testing.T) {
 	endpoints := []string{"dax.us-east-1.amazonaws.com:8111"}
-	hostPorts, _, _, err := getHostPorts(endpoints)
+	hostPorts, _, _, err := getHostPorts(Config{HostPorts: endpoints})
 	if err != nil {
 		t.Errorf("unexpected error %v", err)
 	}
@@ -610,18 +621,18 @@ var encEp = "daxs://cluster2.random.alpha-dax-clusters.us-east-1.amazonaws.com"
 var encNodeEp = "daxs://cluster2-a.random.nodes.alpha-dax-clusters.us-east-1.amazonaws.com:9111"
 
 func Test_InconsistentScheme(t *testing.T) {
-	_, _, _, err := getHostPorts([]string{nonEncEp, encEp})
+	_, _, _, err := getHostPorts(Config{HostPorts: []string{nonEncEp, encEp}})
 	assertEqual(t, reflect.TypeOf(err), reflect.TypeOf(awserr.New(request.ErrCodeRequestError, "", nil)), "")
 }
 
 func Test_MultipleUnEncryptedEndpoints(t *testing.T) {
-	hps, _, _, _ := getHostPorts([]string{nonEncEp, nonEncNodeEp})
+	hps, _, _, _ := getHostPorts(Config{HostPorts: []string{nonEncEp, nonEncNodeEp}})
 	assert.Contains(t, hps, hostPort{"cluster.random.alpha-dax-clusters.us-east-1.amazonaws.com", 8111})
 	assert.Contains(t, hps, hostPort{"cluster-a.random.nodes.alpha-dax-clusters.us-east-1.amazonaws.com", 8111})
 }
 
 func Test_MultipleEncryptedEndpoints(t *testing.T) {
-	_, _, _, err := getHostPorts([]string{encEp, encNodeEp})
+	_, _, _, err := getHostPorts(Config{HostPorts: []string{encEp, encNodeEp}})
 	assertEqual(t, reflect.TypeOf(err), reflect.TypeOf(awserr.New(request.ErrCodeRequestError, "", nil)), "")
 }
 
@@ -722,12 +733,12 @@ func TestCluster_customDialer(t *testing.T) {
 	cfg := Config{
 		MaxPendingConnectionsPerHost: 1,
 		ClusterUpdateInterval:        1 * time.Second,
-		Credentials:                  credentials.NewStaticCredentials("id", "secret", "tok"),
+		Credentials:                  credentials.NewStaticCredentialsProvider("id", "secret", "tok"),
 		DialContext:                  dialContextFn,
 		Region:                       "us-west-2",
 		HostPorts:                    []string{"localhost:9121"},
-		logger:                       aws.NewDefaultLogger(),
-		logLevel:                     aws.LogDebugWithRequestRetries,
+		logger:                       logging.NewStandardLogger(os.Stdout),
+		// logLevel:                     aws.LogDebugWithRequestRetries,
 	}
 	cc, err := New(cfg)
 	require.NoError(t, err)
@@ -743,7 +754,7 @@ type testClientBuilder struct {
 	clients []*testClient
 }
 
-func (b *testClientBuilder) newClient(ip net.IP, port int, connConfigData connConfig, region string, credentials *credentials.Credentials, maxConns int, dialContextFn dialContext) (DaxAPI, error) {
+func (b *testClientBuilder) newClient(ip net.IP, port int, connConfigData connConfig, region string, credentials aws.CredentialsProvider, maxConns int, dialContextFn dialContext) (DaxAPI, error) {
 	t := &testClient{ep: b.ep, hp: hostPort{ip.String(), port}}
 	b.clients = append(b.clients, []*testClient{t}...)
 	return t, nil

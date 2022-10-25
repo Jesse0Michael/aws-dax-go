@@ -16,21 +16,24 @@
 package client
 
 import (
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/client/metadata"
-	"github.com/aws/aws-sdk-go/aws/request"
+	"context"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/client/metadata"
+	"github.com/aws/aws-sdk-go/aws/request"
 )
 
 func TestRequestOptions(t *testing.T) {
 	e := RequestOptions{
-		Logger:     aws.NewDefaultLogger(),
-		LogLevel:   aws.LogDebug,
+		// Logger: logging.NewStandardLogger(os.Stdout),
+		// LogLevel:   aws.LogDebug,
 		RetryDelay: 1 * time.Second,
 		MaxRetries: 5,
-		Context:    aws.BackgroundContext(),
+		Context:    context.TODO(),
 	}
 
 	r := request.New(aws.Config{}, metadata.ClientInfo{}, request.Handlers{}, nil, &request.Operation{Name: OpPutItem}, nil, nil)
@@ -47,15 +50,15 @@ func TestRequestOptions(t *testing.T) {
 }
 
 func TestRequestOptions_MergeFromRequestOptions(t *testing.T) {
-	in := request.WithLogLevel(aws.LogDebugWithHTTPBody)
+	in := func(o *dynamodb.Options) { o.Logger = nil }
 	out := RequestOptions{}
-	if err := out.MergeFromRequestOptions(aws.BackgroundContext(), in); err != nil {
+	if err := out.MergeFromRequestOptions(context.TODO(), in); err != nil {
 		t.Errorf("unexpected error %v", err)
 	}
-	if aws.LogDebugWithHTTPBody != out.LogLevel {
-		t.Errorf("expected %v, got %v", aws.LogDebugWithHTTPBody, out.LogLevel)
-	}
-	if aws.BackgroundContext() != out.Context {
-		t.Errorf("expected %v, got %v", aws.BackgroundContext(), out.Context)
+	// if aws.LogDebugWithHTTPBody != out.LogLevel {
+	// 	t.Errorf("expected %v, got %v", aws.LogDebugWithHTTPBody, out.LogLevel)
+	// }
+	if context.TODO() != out.Context {
+		t.Errorf("expected %v, got %v", context.TODO(), out.Context)
 	}
 }

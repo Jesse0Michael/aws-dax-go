@@ -3,7 +3,8 @@ package dax
 import (
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 )
 
 func TestConfigMergeFrom(t *testing.T) {
@@ -22,16 +23,9 @@ func TestConfigMergeFrom(t *testing.T) {
 			expectedReadRetries:  2,
 		},
 		{
-			testName:             "DefaultConfig merging with an aws config that specifies aws.UseServiceDefaultRetries should result in using default retries",
-			daxConfig:            DefaultConfig(),
-			awsConfig:            aws.Config{MaxRetries: aws.Int(aws.UseServiceDefaultRetries)},
-			expectedWriteRetries: 2,
-			expectedReadRetries:  2,
-		},
-		{
 			testName:             "DefaultConfig merging with an aws config that specifies a non-negative MaxRetry should result in using that value as both WriteRetries and ReadRetries",
 			daxConfig:            DefaultConfig(),
-			awsConfig:            aws.Config{MaxRetries: aws.Int(123)},
+			awsConfig:            aws.Config{RetryMaxAttempts: 123, Retryer: func() aws.Retryer { return retry.NewStandard() }},
 			expectedWriteRetries: 123,
 			expectedReadRetries:  123,
 		},
